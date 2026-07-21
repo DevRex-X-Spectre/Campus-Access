@@ -6,9 +6,14 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    // SPA routes: /admin
+  },
+  preview: {
+    port: 5173,
   },
   build: {
     outDir: "dist",
     sourcemap: false,
   },
+  appType: "spa",
 });

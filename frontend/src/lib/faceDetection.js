@@ -1,11 +1,6 @@
 /**
  * Client-side face detection ONLY — TinyFaceDetector via face-api.js.
- * No landmarks, no recognition net, no SSD MobileNet.
- *
- * Coordinate notes:
- * - face-api returns boxes in the source media pixel space.
- * - react-webcam `mirrored` applies CSS scaleX(-1); overlay must flip X for display.
- * - Crops always use raw, unmirrored source pixels so the backend sees a real face.
+ * Supports video, image, and canvas (rotated IP camera frames).
  */
 
 import * as faceapi from "face-api.js";
@@ -19,15 +14,11 @@ export function areModelsLoaded() {
   return modelsLoaded;
 }
 
-/**
- * Load TinyFaceDetector weights once. Safe to call repeatedly.
- */
 export async function loadTinyFaceDetector() {
   if (modelsLoaded) return;
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
-    // Guard: missing weights often return HTML (index.html) → JSON parse errors.
     const probe = await fetch(`${MODEL_URL}/tiny_face_detector_model-weights_manifest.json`);
     const contentType = probe.headers.get("content-type") || "";
     if (!probe.ok || contentType.includes("text/html")) {
@@ -43,30 +34,25 @@ export async function loadTinyFaceDetector() {
   return loadPromise;
 }
 
-/**
- * Detect the single strongest face in a video or image element.
- * Returns { detection, mediaBox } where mediaBox is in source pixel space,
- * or null if none found.
- */
-export async function detectLargestFace(video) {
+export async function detectLargestFace(input) {
   if (!modelsLoaded) {
     throw new Error("Face detector is not loaded yet");
   }
 
-  const dimensions = getSourceDimensions(video);
+  const dimensions = getSourceDimensions(input);
   if (!dimensions) {
     return null;
   }
 
+  // Slightly lower threshold + larger input for dim / phone IP frames
   const options = new faceapi.TinyFaceDetectorOptions({
-    inputSize: 320,
-    scoreThreshold: 0.5,
+    inputSize: 416,
+    scoreThreshold: 0.35,
   });
 
-  const detections = await faceapi.detectAllFaces(video, options);
+  const detections = await faceapi.detectAllFaces(input, options);
   if (!detections.length) return null;
 
-  // Prefer the largest box (area) — typical for access-control selfies.
   const detection = detections.reduce((best, current) => {
     const bestArea = best.box.width * best.box.height;
     const currentArea = current.box.width * current.box.height;
@@ -85,19 +71,15 @@ export async function detectLargestFace(video) {
   };
 }
 
-/**
- * Map a media-space box onto the rendered (CSS) preview box.
- * When the preview is CSS-mirrored, flip X so the overlay tracks the selfie view.
- */
-export function mediaBoxToDisplay(mediaBox, video, { mirrored = true } = {}) {
-  if (!mediaBox || !video) return null;
+export function mediaBoxToDisplay(mediaBox, element, { mirrored = true } = {}) {
+  if (!mediaBox || !element) return null;
 
-  const dimensions = getSourceDimensions(video);
+  const dimensions = getSourceDimensions(element);
   if (!dimensions) return null;
 
   const { width: vw, height: vh } = dimensions;
-  const dw = video.clientWidth;
-  const dh = video.clientHeight;
+  const dw = element.clientWidth;
+  const dh = element.clientHeight;
   if (!vw || !vh || !dw || !dh) return null;
 
   const scale = Math.max(dw / vw, dh / vh);
@@ -118,17 +100,12 @@ export function mediaBoxToDisplay(mediaBox, video, { mirrored = true } = {}) {
   return { x, y, width, height };
 }
 
-/**
- * Crop a face from a video or image element using a media-space box.
- * Adds padding so the embedding model sees a full face, not a tight cut.
- * Returns a JPEG data URL (base64) suitable for the API.
- */
-export function cropFaceToBase64(video, mediaBox, { padding = 0.25, quality = 0.92 } = {}) {
-  if (!video || !mediaBox) {
+export function cropFaceToBase64(source, mediaBox, { padding = 0.25, quality = 0.92 } = {}) {
+  if (!source || !mediaBox) {
     throw new Error("Video and face detection are required to crop");
   }
 
-  const dimensions = getSourceDimensions(video);
+  const dimensions = getSourceDimensions(source);
   if (!dimensions) {
     throw new Error("Camera image is not ready yet.");
   }
@@ -142,7 +119,6 @@ export function cropFaceToBase64(video, mediaBox, { padding = 0.25, quality = 0.
   let sw = width + padX * 2;
   let sh = height + padY * 2;
 
-  // Clamp to video bounds (media pixels)
   sx = Math.max(0, sx);
   sy = Math.max(0, sy);
   sw = Math.min(dimensions.width - sx, sw);
@@ -153,7 +129,6 @@ export function cropFaceToBase64(video, mediaBox, { padding = 0.25, quality = 0.
   }
 
   const canvas = document.createElement("canvas");
-  // Square canvas helps the 160×160 embedding preprocess.
   const size = Math.max(sw, sh);
   canvas.width = Math.round(size);
   canvas.height = Math.round(size);
@@ -167,7 +142,7 @@ export function cropFaceToBase64(video, mediaBox, { padding = 0.25, quality = 0.
   const dy = (size - sh) / 2;
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(video, sx, sy, sw, sh, dx, dy, sw, sh);
+  ctx.drawImage(source, sx, sy, sw, sh, dx, dy, sw, sh);
 
   return canvas.toDataURL("image/jpeg", quality);
 }
@@ -181,6 +156,10 @@ export function isFaceSourceReady(source) {
 
   if (source instanceof HTMLImageElement) {
     return source.complete && Boolean(source.naturalWidth && source.naturalHeight);
+  }
+
+  if (source instanceof HTMLCanvasElement) {
+    return source.width > 16 && source.height > 16;
   }
 
   return false;
@@ -197,6 +176,11 @@ function getSourceDimensions(source) {
   if (source instanceof HTMLImageElement) {
     if (!source.naturalWidth || !source.naturalHeight) return null;
     return { width: source.naturalWidth, height: source.naturalHeight };
+  }
+
+  if (source instanceof HTMLCanvasElement) {
+    if (!source.width || !source.height) return null;
+    return { width: source.width, height: source.height };
   }
 
   return null;

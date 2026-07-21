@@ -15,20 +15,14 @@ class Settings:
     """Runtime settings for the Campus Access API."""
 
     def __init__(self) -> None:
-        # Cosine similarity threshold for a positive match (0–1).
         self.match_threshold: float = float(os.getenv("MATCH_THRESHOLD", "0.6"))
-
-        # Comma-separated list of allowed frontend origins for CORS.
-        # Default allows local Vite dev server.
         self.allowed_origins: list[str] = _parse_origins(
             os.getenv("ALLOWED_ORIGIN", "http://localhost:5173")
         )
-
-        # SQLite database path (relative paths resolve from process CWD).
         self.database_url: str = os.getenv("DATABASE_URL", "sqlite:///./campus_access.db")
-
-        # Optional override for the SQLite file path when using the sqlite3 driver directly.
         self.sqlite_path: str = os.getenv("SQLITE_PATH", "./campus_access.db")
+        # Simple admin gate PIN (prototype). Override via ADMIN_PIN in production demos.
+        self.admin_pin: str = os.getenv("ADMIN_PIN", "0852")
 
 
 @lru_cache
