@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import logging
 import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
@@ -74,6 +77,9 @@ app.add_middleware(
 )
 settings = get_settings()
 
+MAX_IP_CAMERA_BYTES = 5 * 1024 * 1024
+IP_CAMERA_TIMEOUT_SECONDS = 3
+
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
@@ -81,6 +87,58 @@ def health() -> HealthResponse:
         status="ok" if is_model_loaded() else "degraded",
         model_loaded=is_model_loaded(),
         match_threshold=settings.match_threshold,
+    )
+
+
+@app.get("/ip-camera/snapshot")
+def ip_camera_snapshot(url: str = Query(..., min_length=1)) -> Response:
+    """
+    Fetch a single phone-camera snapshot and return it through this API.
+
+    Many IP Webcam apps do not send CORS headers. Proxying the snapshot keeps
+    browser-side face detection and canvas cropping usable from the frontend.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Enter a valid http:// or https:// snapshot URL.",
+        )
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "CampusAccess/1.0",
+            "Accept": "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=IP_CAMERA_TIMEOUT_SECONDS) as upstream:
+            content_type = upstream.headers.get("content-type", "image/jpeg").split(";")[0]
+            payload = upstream.read(MAX_IP_CAMERA_BYTES + 1)
+    except urllib.error.URLError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach the IP camera snapshot URL.",
+        ) from exc
+
+    if len(payload) > MAX_IP_CAMERA_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="IP camera snapshot is too large.",
+        )
+
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="The IP camera URL must return an image snapshot.",
+        )
+
+    return Response(
+        content=payload,
+        media_type=content_type,
+        headers={"Cache-Control": "no-store"},
     )
 
 

@@ -210,6 +210,80 @@ video {
   opacity: 0;
 }
 
+/* Camera source controls */
+.camera-source-segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(13, 13, 13, 0.08);
+  border: 1px solid rgba(13, 13, 13, 0.12);
+}
+
+.camera-source-segment button {
+  border: none;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-telka);
+  font-size: 14px;
+  font-weight: 450;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  transition:
+    background 0.2s var(--ease-out),
+    color 0.2s var(--ease-out),
+    opacity 0.2s var(--ease-out);
+  background: transparent;
+  color: rgba(13, 13, 13, 0.62);
+}
+
+.camera-source-segment button[data-active="true"] {
+  background: #0d0d0d;
+  color: #ffffff;
+}
+
+.camera-source-segment button:not([data-active="true"]):hover {
+  color: #0d0d0d;
+}
+
+.ip-camera-input {
+  min-width: 0;
+  flex: 1;
+  border-radius: 6px;
+  border: 1px solid rgba(13, 13, 13, 0.18);
+  background: rgba(255, 255, 255, 0.32);
+  padding: 11px 12px;
+  font-family: var(--font-telka);
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: #0d0d0d;
+}
+
+.ip-camera-input::placeholder {
+  color: rgba(13, 13, 13, 0.45);
+}
+
+.ip-camera-input:focus {
+  outline: none;
+  border-color: rgba(13, 13, 13, 0.55);
+}
+
+.ip-camera-apply {
+  flex-shrink: 0;
+  border: none;
+  border-radius: 6px;
+  background: #0d0d0d;
+  color: #ffffff;
+  padding: 11px 16px;
+  font-family: var(--font-telka);
+  font-size: 14px;
+  font-weight: 450;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+}
+
 /* Corner brackets for face lock */
 .face-bracket {
   position: absolute;

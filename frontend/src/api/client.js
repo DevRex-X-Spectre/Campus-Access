@@ -54,6 +54,11 @@ export function getApiUrl() {
   return API_URL;
 }
 
+export function getIpCameraSnapshotUrl(snapshotUrl) {
+  const params = new URLSearchParams({ url: snapshotUrl });
+  return `${API_URL}/ip-camera/snapshot?${params.toString()}`;
+}
+
 export function enrollFace({ name, image }) {
   return request("/enroll", {
     method: "POST",

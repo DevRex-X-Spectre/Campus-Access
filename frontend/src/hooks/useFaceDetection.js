@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   areModelsLoaded,
   detectLargestFace,
+  isFaceSourceReady,
   loadTinyFaceDetector,
   mediaBoxToDisplay,
 } from "../lib/faceDetection";
@@ -24,6 +25,12 @@ export function useFaceDetection(
   const rafRef = useRef(null);
   const lastRunRef = useRef(0);
   const runningRef = useRef(false);
+
+  const clearDetection = useCallback(() => {
+    setDisplayBox(null);
+    setMediaBox(null);
+    setScore(null);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,10 +62,8 @@ export function useFaceDetection(
       if (timestamp - lastRunRef.current < intervalMs) return;
 
       const video = videoRef.current;
-      if (!video || video.readyState < 2) {
-        setDisplayBox(null);
-        setMediaBox(null);
-        setScore(null);
+      if (!isFaceSourceReady(video)) {
+        clearDetection();
         return;
       }
 
@@ -68,9 +73,7 @@ export function useFaceDetection(
       try {
         const result = await detectLargestFace(video);
         if (!result) {
-          setDisplayBox(null);
-          setMediaBox(null);
-          setScore(null);
+          clearDetection();
         } else {
           setMediaBox(result.mediaBox);
           setScore(result.score ?? null);
@@ -79,15 +82,19 @@ export function useFaceDetection(
           );
         }
       } catch {
-        setDisplayBox(null);
-        setMediaBox(null);
-        setScore(null);
+        clearDetection();
       } finally {
         runningRef.current = false;
       }
     },
-    [detectorReady, enabled, intervalMs, mirrored, videoRef],
+    [clearDetection, detectorReady, enabled, intervalMs, mirrored, videoRef],
   );
+
+  useEffect(() => {
+    if (!enabled) {
+      clearDetection();
+    }
+  }, [clearDetection, enabled]);
 
   useEffect(() => {
     if (!detectorReady) return undefined;

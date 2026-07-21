@@ -1,8 +1,9 @@
-import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import Webcam from "react-webcam";
+import { getIpCameraSnapshotUrl } from "../api/client";
 import FaceOverlay from "./FaceOverlay";
 import { useFaceDetection } from "../hooks/useFaceDetection";
-import { cropFaceToBase64 } from "../lib/faceDetection";
+import { cropFaceToBase64, isFaceSourceReady } from "../lib/faceDetection";
 
 /**
  * Cream panel: camera stays fixed on mobile (parent does not scroll this block).
@@ -13,21 +14,53 @@ const CameraPanel = forwardRef(function CameraPanel(
   ref,
 ) {
   const webcamRef = useRef(null);
+  const ipImageRef = useRef(null);
   const videoRef = useRef(null);
+  const [cameraSource, setCameraSource] = useState("webcam");
+  const [ipCameraUrl, setIpCameraUrl] = useState("");
+  const [activeIpCameraUrl, setActiveIpCameraUrl] = useState("");
+  const [ipFrameUrl, setIpFrameUrl] = useState("");
+  const [ipCameraError, setIpCameraError] = useState(null);
   const [permissionError, setPermissionError] = useState(null);
-  const mirrored = true;
+  const isIpCamera = cameraSource === "ip";
+  const mirrored = !isIpCamera;
 
   const syncVideoNode = useCallback(() => {
-    videoRef.current = webcamRef.current?.video ?? null;
-  }, []);
+    videoRef.current = isIpCamera
+      ? ipImageRef.current
+      : webcamRef.current?.video ?? null;
+  }, [isIpCamera]);
+
+  const cameraError = isIpCamera ? ipCameraError : permissionError;
+  const sourceReady = !isIpCamera || Boolean(activeIpCameraUrl);
 
   const { detectorReady, detectorError, displayBox, mediaBox } = useFaceDetection(
     videoRef,
     {
-      enabled: cameraEnabled && !permissionError,
+      enabled: cameraEnabled && sourceReady && !cameraError,
       mirrored,
     },
   );
+
+  useEffect(() => {
+    syncVideoNode();
+  }, [cameraSource, ipFrameUrl, syncVideoNode]);
+
+  useEffect(() => {
+    if (!isIpCamera || !activeIpCameraUrl) return undefined;
+
+    const refreshFrame = () => {
+      const snapshotUrl = getIpCameraSnapshotUrl(activeIpCameraUrl);
+      setIpFrameUrl(`${snapshotUrl}&t=${Date.now()}`);
+    };
+
+    refreshFrame();
+    const intervalId = window.setInterval(refreshFrame, 350);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeIpCameraUrl, isIpCamera]);
 
   const handleUserMedia = useCallback(() => {
     setPermissionError(null);
@@ -48,14 +81,32 @@ const CameraPanel = forwardRef(function CameraPanel(
     [onCameraError],
   );
 
+  const handleCameraSourceChange = useCallback((nextSource) => {
+    setCameraSource(nextSource);
+    setPermissionError(null);
+    setIpCameraError(null);
+  }, []);
+
+  const handleIpCameraSubmit = useCallback(
+    (event) => {
+      event.preventDefault();
+      const nextUrl = ipCameraUrl.trim();
+      setIpCameraError(null);
+      setActiveIpCameraUrl(nextUrl);
+      setIpFrameUrl("");
+      syncVideoNode();
+    },
+    [ipCameraUrl, syncVideoNode],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
       async captureFace() {
         syncVideoNode();
         const video = videoRef.current;
-        if (!video || video.readyState < 2) {
-          throw new Error("The camera is still starting. Please wait a moment.");
+        if (!isFaceSourceReady(video)) {
+          throw new Error("The camera image is still starting. Please wait a moment.");
         }
         if (!detectorReady) {
           throw new Error("Getting ready… Please wait a moment and try again.");
@@ -66,20 +117,22 @@ const CameraPanel = forwardRef(function CameraPanel(
         return cropFaceToBase64(video, mediaBox);
       },
       hasFace: () => Boolean(mediaBox),
-      isReady: () => Boolean(detectorReady && !permissionError),
+      isReady: () => Boolean(detectorReady && !cameraError),
     }),
-    [detectorReady, mediaBox, permissionError, syncVideoNode],
+    [cameraError, detectorReady, mediaBox, syncVideoNode],
   );
 
   const faceReady = Boolean(mediaBox);
-  const systemReady = detectorReady && !detectorError && !permissionError;
+  const systemReady = detectorReady && !detectorError && sourceReady && !cameraError;
 
   let helperText = "Center your face in the frame";
   let helperTone = "idle";
 
-  if (permissionError) {
-    helperText = permissionError;
+  if (cameraError) {
+    helperText = cameraError;
     helperTone = "error";
+  } else if (isIpCamera && !activeIpCameraUrl) {
+    helperText = "Enter the phone snapshot URL";
   } else if (detectorError) {
     helperText = "Camera setup is incomplete. Refresh the page or try again shortly.";
     helperTone = "error";
@@ -109,14 +162,90 @@ const CameraPanel = forwardRef(function CameraPanel(
           Look at the camera
         </h1>
 
+        <div className="mb-16 flex w-full flex-col gap-10 animate-fade-up animate-delay-1">
+          <div
+            className="camera-source-segment"
+            role="tablist"
+            aria-label="Camera source"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!isIpCamera}
+              data-active={!isIpCamera}
+              onClick={() => handleCameraSourceChange("webcam")}
+            >
+              PC camera
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isIpCamera}
+              data-active={isIpCamera}
+              onClick={() => handleCameraSourceChange("ip")}
+            >
+              Phone IP
+            </button>
+          </div>
+
+          {isIpCamera && (
+            <form className="flex gap-8 animate-fade-in" onSubmit={handleIpCameraSubmit}>
+              <input
+                type="url"
+                value={ipCameraUrl}
+                onChange={(event) => setIpCameraUrl(event.target.value)}
+                placeholder="http://phone-ip:8080/shot.jpg"
+                className="ip-camera-input"
+              />
+              <button type="submit" className="ip-camera-apply">
+                Use
+              </button>
+            </form>
+          )}
+        </div>
+
         {/* Video tile — slightly shorter on mobile so controls get room */}
-        <div className="relative aspect-[4/3] w-full max-h-[48vh] overflow-hidden rounded-card bg-void-black animate-fade-up animate-delay-1 md:max-h-none">
-          {permissionError ? (
+        <div className="relative aspect-[4/3] w-full max-h-[48vh] overflow-hidden rounded-card bg-void-black animate-fade-up animate-delay-2 md:max-h-none">
+          {cameraError ? (
             <div className="flex h-full w-full items-center justify-center px-24 text-center">
               <p className="font-telka text-body-sm font-light text-polished-white/90">
-                {permissionError}
+                {cameraError}
               </p>
             </div>
+          ) : isIpCamera ? (
+            <>
+              {ipFrameUrl ? (
+                <img
+                  ref={ipImageRef}
+                  src={ipFrameUrl}
+                  alt=""
+                  crossOrigin="anonymous"
+                  onLoad={() => {
+                    setIpCameraError(null);
+                    syncVideoNode();
+                  }}
+                  onError={() => {
+                    setIpCameraError("Could not load the phone camera snapshot.");
+                  }}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center px-24 text-center">
+                  <p className="font-telka text-body-sm font-light text-polished-white/70">
+                    Waiting for phone camera
+                  </p>
+                </div>
+              )}
+
+              {systemReady && !faceReady && (
+                <div className="scan-frame" aria-hidden="true" />
+              )}
+              {systemReady && faceReady && (
+                <div className="scan-frame is-locked" aria-hidden="true" />
+              )}
+
+              <FaceOverlay box={displayBox} />
+            </>
           ) : (
             <>
               <Webcam
