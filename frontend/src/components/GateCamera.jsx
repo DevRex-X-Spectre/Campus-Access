@@ -12,44 +12,39 @@ import {
 import { cropFaceToBase64, isFaceSourceReady } from "../lib/faceDetection";
 
 /**
- * Gate camera — Camera IP with upright rotation + PC fallback.
+ * Gate camera — Camera IP only (phone IP Webcam).
+ * Reports online/offline + face presence for status colors.
  */
-const GateCamera = forwardRef(function GateCamera({ onFacePresenceChange }, ref) {
-  const webcamVideoRef = useRef(null);
+const GateCamera = forwardRef(function GateCamera(
+  { onFacePresenceChange, onCameraStatusChange },
+  ref,
+) {
   const sourceRef = useRef(null);
-  const streamRef = useRef(null);
 
-  const [mode, setMode] = useState("ip");
   const [activeIpUrl, setActiveIpUrl] = useState(
     () => localStorage.getItem("campus_ip_camera_url") || "",
   );
   const [rotation, setRotation] = useState(() => getSavedRotation());
-  const [error, setError] = useState(null);
-  const [pcReady, setPcReady] = useState(false);
-
-  const isIp = mode === "ip";
-  const mirrored = !isIp;
 
   const {
     canvasRef: ipCanvasRef,
     frameReady: ipReady,
     error: ipError,
   } = useIpCameraStream(activeIpUrl, rotation, {
-    enabled: isIp && Boolean(activeIpUrl),
+    enabled: Boolean(activeIpUrl),
   });
 
-  const syncSource = useCallback(() => {
-    sourceRef.current = isIp ? ipCanvasRef.current : webcamVideoRef.current;
-  }, [isIp, ipCanvasRef]);
+  const cameraOnline = Boolean(activeIpUrl && ipReady && !ipError);
 
-  const sourceReady = isIp ? ipReady : pcReady;
-  const combinedError = isIp ? ipError || error : error;
+  const syncSource = useCallback(() => {
+    sourceRef.current = ipCanvasRef.current;
+  }, [ipCanvasRef]);
 
   const { detectorReady, detectorError, displayBox, mediaBox } = useFaceDetection(
     sourceRef,
     {
-      enabled: sourceReady && !combinedError,
-      mirrored,
+      enabled: cameraOnline,
+      mirrored: false,
       intervalMs: 120,
     },
   );
@@ -61,60 +56,16 @@ const GateCamera = forwardRef(function GateCamera({ onFacePresenceChange }, ref)
   }, [facePresent, onFacePresenceChange]);
 
   useEffect(() => {
-    syncSource();
-  }, [syncSource, ipReady, pcReady, mode, rotation]);
+    onCameraStatusChange?.({
+      online: cameraOnline,
+      connected: Boolean(activeIpUrl),
+      error: ipError || detectorError || null,
+    });
+  }, [activeIpUrl, cameraOnline, detectorError, ipError, onCameraStatusChange]);
 
   useEffect(() => {
-    if (isIp) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-      setPcReady(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setError(null);
-
-    navigator.mediaDevices
-      .getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      })
-      .then((stream) => {
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-        if (webcamVideoRef.current) {
-          webcamVideoRef.current.srcObject = stream;
-          webcamVideoRef.current.onloadedmetadata = () => {
-            webcamVideoRef.current?.play().catch(() => {});
-            setPcReady(true);
-            syncSource();
-          };
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        const message =
-          err?.name === "NotAllowedError"
-            ? "Camera access is blocked on this computer."
-            : "Could not open the PC camera.";
-        setError(message);
-        setPcReady(false);
-      });
-
-    return () => {
-      cancelled = true;
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-    };
-  }, [isIp, syncSource]);
+    syncSource();
+  }, [syncSource, ipReady, rotation]);
 
   useImperativeHandle(
     ref,
@@ -134,12 +85,12 @@ const GateCamera = forwardRef(function GateCamera({ onFacePresenceChange }, ref)
         return cropFaceToBase64(el, mediaBox);
       },
       hasFace: () => Boolean(mediaBox),
+      isOnline: () => cameraOnline,
     }),
-    [detectorReady, mediaBox, syncSource],
+    [cameraOnline, detectorReady, mediaBox, syncSource],
   );
 
   const handleIpConnect = useCallback((nextUrl) => {
-    setError(null);
     setActiveIpUrl(nextUrl);
   }, []);
 
@@ -150,63 +101,53 @@ const GateCamera = forwardRef(function GateCamera({ onFacePresenceChange }, ref)
   };
 
   let helper = "Waiting for a face…";
-  if (combinedError) helper = combinedError;
-  else if (isIp && !activeIpUrl) helper = "Find phone or wait for auto-reconnect";
-  else if (detectorError) helper = "Camera setup incomplete — check face models in /public/models";
-  else if (!detectorReady) helper = "Preparing detector…";
-  else if (facePresent) helper = "Face locked — verifying…";
-  else if (isIp) helper = "If sideways, tap Rotate. Center face in frame.";
+  let helperTone = "idle";
+  if (!activeIpUrl) {
+    helper = "Find phone or connect Camera IP";
+    helperTone = "offline";
+  } else if (ipError) {
+    helper = ipError;
+    helperTone = "offline";
+  } else if (detectorError) {
+    helper = "Camera setup incomplete — check face models";
+    helperTone = "offline";
+  } else if (!ipReady || !detectorReady) {
+    helper = "Connecting camera…";
+    helperTone = "online";
+  } else if (facePresent) {
+    helper = "Face locked — verifying…";
+    helperTone = "online";
+  } else {
+    helper = "Camera online — center face in frame (Rotate if sideways)";
+    helperTone = "online";
+  }
 
   return (
     <div className="gate-camera">
-      <div className="gate-source-tabs" role="tablist" aria-label="Camera source">
-        <button
-          type="button"
-          data-active={isIp}
-          onClick={() => {
-            setMode("ip");
-            setError(null);
-          }}
-        >
-          Camera IP
-        </button>
-        <button
-          type="button"
-          data-active={!isIp}
-          onClick={() => {
-            setMode("pc");
-            setError(null);
-          }}
-        >
-          PC camera
-        </button>
+      <div className="camera-status-row">
+        <span className={`status-dot-lg ${cameraOnline ? "status-online" : "status-offline"}`} />
+        <span className="camera-status-label">
+          {cameraOnline ? "Camera online" : "Camera offline"}
+        </span>
       </div>
 
-      {isIp && (
-        <>
-          <CameraIpConnect activeUrl={activeIpUrl} onConnect={handleIpConnect} />
-          <RotationControls rotation={rotation} onRotate={handleRotate} />
-        </>
-      )}
+      <CameraIpConnect activeUrl={activeIpUrl} onConnect={handleIpConnect} />
+      <RotationControls rotation={rotation} onRotate={handleRotate} />
 
-      <div className="gate-preview">
-        {isIp ? (
-          activeIpUrl ? (
-            <canvas ref={ipCanvasRef} className="gate-media" />
-          ) : (
-            <div className="gate-preview-empty">Waiting for Camera IP</div>
-          )
+      <div className={`gate-preview ${cameraOnline ? "is-online" : "is-offline"}`}>
+        {activeIpUrl ? (
+          <canvas ref={ipCanvasRef} className="gate-media" />
         ) : (
-          <video ref={webcamVideoRef} muted playsInline className="gate-media mirror" />
+          <div className="gate-preview-empty">Waiting for Camera IP</div>
         )}
 
         {facePresent && <FaceOverlay box={displayBox} />}
-        {!facePresent && sourceReady && !combinedError && detectorReady && (
+        {!facePresent && cameraOnline && detectorReady && (
           <div className="scan-frame" aria-hidden="true" />
         )}
       </div>
 
-      <p className="gate-helper" role="status">
+      <p className={`gate-helper tone-${helperTone}`} role="status">
         {helper}
       </p>
     </div>

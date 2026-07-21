@@ -5,12 +5,37 @@ import { fetchAreas, getApiUrl, recognizeFace } from "../api/client";
 const AREA_KEY = "campus_gate_area_id";
 
 /**
- * Gate kiosk:
- * - Camera IP live feed
- * - Auto-scan when a face is locked (no button)
- * - Shows granted / denied with reason
- * - Re-arms when the face leaves so the next person is scanned immediately
+ * Status colors (surveillance dashboard):
+ *  green  #22C55E — Authorized Access
+ *  yellow #F59E0B — Unknown Face
+ *  red    #EF4444 — Unauthorized / Alert
+ *  blue   #2563EB — Camera Online
+ *  gray   #9CA3AF — Camera Offline
  */
+function classifyResult(data) {
+  if (data.granted) {
+    return {
+      tone: "authorized",
+      title: "Authorized access",
+      kicker: "Access granted",
+    };
+  }
+  // Known person but denied (blacklist, staff-only, etc.)
+  if (data.recognized) {
+    return {
+      tone: "unauthorized",
+      title: "Unauthorized entry",
+      kicker: "Access denied",
+    };
+  }
+  // Not in the system
+  return {
+    tone: "unknown",
+    title: "Unknown face",
+    kicker: "Access denied",
+  };
+}
+
 export default function GatePage() {
   const cameraRef = useRef(null);
   const scanningRef = useRef(false);
@@ -26,6 +51,7 @@ export default function GatePage() {
   const [areasError, setAreasError] = useState(null);
   const [result, setResult] = useState(null);
   const [statusLine, setStatusLine] = useState("Ready for the next person");
+  const [cameraOnline, setCameraOnline] = useState(false);
 
   areaIdRef.current = areaId;
 
@@ -38,7 +64,9 @@ export default function GatePage() {
         setAreas(list);
         setAreasError(null);
         if (!list.length) {
-          setAreasError("No areas on the server. Open Admin and create areas, or restart the backend.");
+          setAreasError(
+            "No areas on the server. Open Admin and create areas, or restart the backend.",
+          );
           return;
         }
         const saved = Number(localStorage.getItem(AREA_KEY));
@@ -74,8 +102,9 @@ export default function GatePage() {
     const currentArea = areaIdRef.current;
     if (!currentArea) {
       setResult({
-        granted: false,
-        title: "Access denied",
+        tone: "unauthorized",
+        title: "Unauthorized entry",
+        kicker: "Access denied",
         reason: "Select an area before scanning.",
       });
       return;
@@ -89,9 +118,9 @@ export default function GatePage() {
     try {
       const image = await cameraRef.current.captureFace();
       const data = await recognizeFace({ image, area_id: currentArea });
+      const classified = classifyResult(data);
       setResult({
-        granted: Boolean(data.granted),
-        title: data.granted ? "Access granted" : "Access denied",
+        ...classified,
         reason: data.reason || data.message,
         name: data.name,
         role: data.role,
@@ -101,22 +130,21 @@ export default function GatePage() {
       setStatusLine("Step away for the next person");
     } catch (err) {
       setResult({
-        granted: false,
-        title: "Access denied",
+        tone: "unauthorized",
+        title: "Unauthorized entry",
+        kicker: "Alert",
         reason: err?.message || "Scan failed.",
       });
       setStatusLine("Step away, then try again");
     } finally {
       setLoading(false);
       scanningRef.current = false;
-      // Stay disarmed until face leaves (handled in onFacePresenceChange)
     }
   }, []);
 
   const onFacePresenceChange = useCallback(
     (present) => {
       if (!present) {
-        // Face left the frame — re-arm immediately for the next person
         if (!scanningRef.current) {
           armedRef.current = true;
           setStatusLine("Ready for the next person");
@@ -124,11 +152,9 @@ export default function GatePage() {
         return;
       }
 
-      // Face locked in frame
       if (!armedRef.current || scanningRef.current) return;
       if (!areaIdRef.current) return;
 
-      // Small settle delay so the crop is stable, then scan once
       window.setTimeout(() => {
         if (!armedRef.current || scanningRef.current) return;
         if (!cameraRef.current?.hasFace?.()) return;
@@ -138,7 +164,16 @@ export default function GatePage() {
     [runScan],
   );
 
+  const onCameraStatusChange = useCallback((status) => {
+    setCameraOnline(Boolean(status?.online));
+  }, []);
+
   const selectedArea = areas.find((a) => a.id === areaId) || null;
+
+  // Panel tone: result takes priority; else camera online/offline
+  let panelTone = cameraOnline ? "online" : "offline";
+  if (loading) panelTone = "online";
+  if (result?.tone) panelTone = result.tone;
 
   return (
     <div className="gate-page">
@@ -147,9 +182,19 @@ export default function GatePage() {
           <p className="gate-kicker">Campus Access</p>
           <h1 className="gate-title">Entry gate</h1>
         </div>
-        <a className="gate-admin-link" href="/admin">
-          Admin
-        </a>
+        <div className="gate-top-right">
+          <div className="camera-status-row header-status">
+            <span
+              className={`status-dot-lg ${cameraOnline ? "status-online" : "status-offline"}`}
+            />
+            <span className="camera-status-label">
+              {cameraOnline ? "Camera online" : "Camera offline"}
+            </span>
+          </div>
+          <a className="gate-admin-link" href="/admin">
+            Admin
+          </a>
+        </div>
       </header>
 
       <main className="gate-main">
@@ -177,7 +222,11 @@ export default function GatePage() {
           )}
           {areasError && <p className="gate-area-error">{areasError}</p>}
 
-          <GateCamera ref={cameraRef} onFacePresenceChange={onFacePresenceChange} />
+          <GateCamera
+            ref={cameraRef}
+            onFacePresenceChange={onFacePresenceChange}
+            onCameraStatusChange={onCameraStatusChange}
+          />
 
           <p className="gate-auto-status" role="status">
             {loading ? "Scanning…" : statusLine}
@@ -186,18 +235,34 @@ export default function GatePage() {
 
         <section className="gate-right" aria-live="polite">
           {!result ? (
-            <div className="gate-result idle">
-              <p className="gate-result-kicker">Live gate</p>
-              <h2 className="gate-result-title">Ready</h2>
+            <div className={`gate-result tone-${panelTone}`}>
+              <div className="gate-result-status">
+                <span
+                  className={`status-dot-lg ${
+                    cameraOnline ? "status-online" : "status-offline"
+                  }`}
+                />
+                <p className="gate-result-kicker">
+                  {cameraOnline ? "Camera online / active" : "Camera offline / inactive"}
+                </p>
+              </div>
+              <h2 className="gate-result-title">
+                {cameraOnline ? "Ready" : "Offline"}
+              </h2>
               <p className="gate-result-reason">
-                Connect Camera IP. When a face is detected, access is decided automatically.
+                {cameraOnline
+                  ? "When a face is detected, access is decided automatically."
+                  : "Connect Camera IP on the left to begin live scanning."}
               </p>
             </div>
           ) : (
-            <div className={`gate-result ${result.granted ? "ok" : "deny"}`}>
-              <p className="gate-result-kicker">
-                {result.area ? result.area : "Gate decision"}
-              </p>
+            <div className={`gate-result tone-${result.tone}`}>
+              <div className="gate-result-status">
+                <span className={`status-dot-lg status-${result.tone}`} />
+                <p className="gate-result-kicker">
+                  {result.area || result.kicker}
+                </p>
+              </div>
               <h2 className="gate-result-title">{result.title}</h2>
               <p className="gate-result-reason">{result.reason}</p>
               {(result.name || result.role || result.matric) && (

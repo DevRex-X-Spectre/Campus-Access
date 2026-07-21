@@ -13,14 +13,11 @@ import {
 import { cropFaceToBase64, isFaceSourceReady } from "../lib/faceDetection";
 
 /**
- * Admin registration: Camera IP (rotated upright) and/or PC webcam.
+ * Admin registration — Camera IP only (phone IP Webcam).
  */
 export default function AdminEnrollForm({ pin, defaultRole = "student", onDone }) {
-  const videoRef = useRef(null);
   const sourceRef = useRef(null);
-  const streamRef = useRef(null);
 
-  const [mode, setMode] = useState("ip");
   const [activeIpUrl, setActiveIpUrl] = useState(
     () => localStorage.getItem("campus_ip_camera_url") || "",
   );
@@ -31,87 +28,36 @@ export default function AdminEnrollForm({ pin, defaultRole = "student", onDone }
   const [role, setRole] = useState(defaultRole);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
-  const [camError, setCamError] = useState(null);
-  const [pcReady, setPcReady] = useState(false);
-
-  const isIp = mode === "ip";
-  const mirrored = !isIp;
 
   const {
     canvasRef: ipCanvasRef,
     frameReady: ipReady,
     error: ipError,
   } = useIpCameraStream(activeIpUrl, rotation, {
-    enabled: isIp && Boolean(activeIpUrl),
+    enabled: Boolean(activeIpUrl),
   });
+
+  const cameraOnline = Boolean(activeIpUrl && ipReady && !ipError);
 
   useEffect(() => {
     setRole(defaultRole);
   }, [defaultRole]);
 
   const syncSource = useCallback(() => {
-    sourceRef.current = isIp ? ipCanvasRef.current : videoRef.current;
-  }, [isIp, ipCanvasRef]);
-
-  const sourceReady = isIp ? ipReady : pcReady;
-  const displayError = isIp ? ipError : camError;
-
-  useEffect(() => {
-    if (isIp) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-      setPcReady(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setCamError(null);
-
-    navigator.mediaDevices
-      .getUserMedia({
-        video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
-        audio: false,
-      })
-      .then((stream) => {
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play().catch(() => {});
-            setPcReady(true);
-            syncSource();
-          };
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setCamError("Allow PC camera access, or switch to Camera IP.");
-      });
-
-    return () => {
-      cancelled = true;
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    };
-  }, [isIp, syncSource]);
+    sourceRef.current = ipCanvasRef.current;
+  }, [ipCanvasRef]);
 
   useEffect(() => {
     syncSource();
-  }, [syncSource, ipReady, pcReady, mode, rotation]);
+  }, [syncSource, ipReady, rotation]);
 
   const { detectorReady, displayBox, mediaBox } = useFaceDetection(sourceRef, {
-    enabled: sourceReady && !displayError,
-    mirrored,
+    enabled: cameraOnline,
+    mirrored: false,
     intervalMs: 120,
   });
 
   const handleIpConnect = useCallback((nextUrl) => {
-    setCamError(null);
     setActiveIpUrl(nextUrl);
   }, []);
 
@@ -169,65 +115,37 @@ export default function AdminEnrollForm({ pin, defaultRole = "student", onDone }
   );
 
   let hint = "Center face for capture";
-  if (displayError) hint = displayError;
-  else if (isIp && !activeIpUrl) hint = "Connect Camera IP, then center the face";
+  if (!activeIpUrl) hint = "Connect Camera IP, then center the face";
+  else if (ipError) hint = ipError;
   else if (!detectorReady) hint = "Preparing detector…";
   else if (mediaBox) hint = "Face ready — click Register face";
-  else if (isIp) hint = "If sideways, tap Rotate until upright";
+  else hint = "If sideways, tap Rotate until upright";
 
   return (
     <div className="admin-enroll">
       <div className="admin-enroll-grid">
         <div className="admin-enroll-left">
-          <div className="gate-source-tabs admin-source-tabs" role="tablist" aria-label="Camera source">
-            <button
-              type="button"
-              data-active={isIp}
-              onClick={() => {
-                setMode("ip");
-                setCamError(null);
-              }}
-            >
-              Camera IP
-            </button>
-            <button
-              type="button"
-              data-active={!isIp}
-              onClick={() => {
-                setMode("pc");
-                setCamError(null);
-              }}
-            >
-              PC camera
-            </button>
+          <div className="camera-status-row">
+            <span
+              className={`status-dot-lg ${cameraOnline ? "status-online" : "status-offline"}`}
+            />
+            <span className="camera-status-label">
+              {cameraOnline ? "Camera online" : "Camera offline"}
+            </span>
           </div>
 
-          {isIp && (
-            <>
-              <CameraIpConnect
-                activeUrl={activeIpUrl}
-                onConnect={handleIpConnect}
-                disabled={busy}
-              />
-              <RotationControls
-                rotation={rotation}
-                onRotate={handleRotate}
-                disabled={busy}
-              />
-            </>
-          )}
+          <CameraIpConnect
+            activeUrl={activeIpUrl}
+            onConnect={handleIpConnect}
+            disabled={busy}
+          />
+          <RotationControls rotation={rotation} onRotate={handleRotate} disabled={busy} />
 
-          <div className="admin-enroll-cam">
-            {displayError && !isIp ? (
-              <div className="admin-enroll-empty">{displayError}</div>
-            ) : isIp ? (
-              activeIpUrl ? (
-                <canvas ref={ipCanvasRef} className="admin-enroll-video" />
-              ) : (
-                <div className="admin-enroll-empty">Connect Camera IP to preview</div>
-              )
+          <div className={`admin-enroll-cam ${cameraOnline ? "is-online" : "is-offline"}`}>
+            {activeIpUrl ? (
+              <canvas ref={ipCanvasRef} className="admin-enroll-video" />
             ) : (
-              <video ref={videoRef} muted playsInline className="admin-enroll-video mirror" />
+              <div className="admin-enroll-empty">Connect Camera IP to preview</div>
             )}
 
             {mediaBox && <FaceOverlay box={displayBox} />}

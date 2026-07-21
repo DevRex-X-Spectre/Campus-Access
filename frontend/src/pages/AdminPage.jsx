@@ -306,7 +306,7 @@ export default function AdminPage() {
           <section className="admin-card">
             <h3>Register a person</h3>
             <p className="admin-card-copy">
-              Capture with <strong>Camera IP</strong> (phone IP Webcam) or <strong>PC camera</strong>.
+              Capture with <strong>Camera IP</strong> (phone IP Webcam).
               Choose Student or Staff — that role controls staff-only areas at the gate.
             </p>
             <AdminEnrollForm
