@@ -1,0 +1,15 @@
+# Render Static Site — SPA rewrite so /admin does not 404
+# In the dashboard: Root Directory = frontend, Publish = dist
+# Or connect this blueprint.
+
+services:
+  - type: web
+    name: campus-access-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

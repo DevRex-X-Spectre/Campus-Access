@@ -191,7 +191,7 @@ export default function GatePage() {
               {cameraOnline ? "Camera online" : "Camera offline"}
             </span>
           </div>
-          <a className="gate-admin-link" href="/admin">
+          <a className="gate-admin-link" href="#/admin">
             Admin
           </a>
         </div>

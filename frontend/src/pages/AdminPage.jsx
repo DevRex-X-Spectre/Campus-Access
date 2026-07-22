@@ -205,7 +205,7 @@ export default function AdminPage() {
             </button>
           </form>
           <p className="admin-api-hint">API: {getApiUrl()}</p>
-          <a href="/" className="admin-back">
+          <a href="#/" className="admin-back">
             ← Back to gate
           </a>
         </div>
@@ -241,7 +241,7 @@ export default function AdminPage() {
           <button type="button" className="admin-btn-ghost" onClick={handleLock}>
             Lock
           </button>
-          <a href="/" className="admin-back">
+          <a href="#/" className="admin-back">
             ← Gate
           </a>
         </div>
